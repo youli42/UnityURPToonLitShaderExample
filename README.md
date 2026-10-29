@@ -1,3 +1,8 @@
+> **本分支（feat/unity-urp-project）说明**
+> 已把仓库升级为可直接打开的 Unity 2022.3.42f1c1 + URP 14.0.11 工程：shader 源码移到 `Assets/ToonShader/` 且注释已汉化，场景只用 Unity 内置图元做对照演示（无模型资产）。
+> 入门请看 [Docs/学习指南.md](Docs/学习指南.md)，双击 `open-unity.bat` 即可打开工程，菜单 `Toon Learning → Setup` 可一键重建场景并出图验证。
+> 英文原版 shader 与原始 README 内容保持不变，可切到 `master` 分支对照。
+
 # About this repository
 
 This repository does NOT contain the full version of NiloToonURP.  
