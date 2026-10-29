@@ -3,9 +3,9 @@
 #ifndef Include_NiloOutlineUtil
 #define Include_NiloOutlineUtil
 
-// If your project has a faster way to get camera fov in shader, you can replace this slow function to your method.
-// For example, you write cmd.SetGlobalFloat("_CurrentCameraFOV",cameraFOV) using a new RendererFeature in C#.
-// For this tutorial shader, we will keep things simple and use this slower but convenient method to get camera fov
+// 如果你的工程有更快的方式在 shader 里取相机 FOV，可以把这个慢函数换成你的方法，
+// 例如在 C# 里写一个 RendererFeature 并执行 cmd.SetGlobalFloat("_CurrentCameraFOV",cameraFOV)。
+// 教学 shader 图简单，保留这个更慢但更方便的取 FOV 方法
 float GetCameraFOV()
 {
     //https://answers.unity.com/questions/770838/how-can-i-extract-the-fov-information-from-the-pro.html
@@ -16,7 +16,7 @@ float GetCameraFOV()
 }
 float ApplyOutlineDistanceFadeOut(float inputMulFix)
 {
-    //make outline "fadeout" if character is too small in camera's view
+    //角色在画面里太小时，让描边（outline）淡出
     return saturate(inputMulFix);
 }
 float GetOutlineCameraFovAndDistanceFixMultiplier(float positionVS_Z)
@@ -25,29 +25,29 @@ float GetOutlineCameraFovAndDistanceFixMultiplier(float positionVS_Z)
     if(unity_OrthoParams.w == 0)
     {
         ////////////////////////////////
-        // Perspective camera case
+        // 透视相机分支
         ////////////////////////////////
 
-        // keep outline similar width on screen accoss all camera distance       
+        // 让描边在各种相机距离下的屏幕宽度保持一致
         cameraMulFix = abs(positionVS_Z);
 
-        // can replace to a tonemap function if a smooth stop is needed
+        // 想要平滑截止的话，可换成 tonemap 函数
         cameraMulFix = ApplyOutlineDistanceFadeOut(cameraMulFix);
 
-        // keep outline similar width on screen accoss all camera fov
+        // 让描边在各种相机 FOV 下的屏幕宽度保持一致
         cameraMulFix *= GetCameraFOV();       
     }
     else
     {
         ////////////////////////////////
-        // Orthographic camera case
+        // 正交相机分支
         ////////////////////////////////
         float orthoSize = abs(unity_OrthoParams.y);
         orthoSize = ApplyOutlineDistanceFadeOut(orthoSize);
-        cameraMulFix = orthoSize * 50; // 50 is a magic number to match perspective camera's outline width
+        cameraMulFix = orthoSize * 50; // 50 是魔法数字，用来匹配透视相机的描边宽度
     }
 
-    return cameraMulFix * 0.00005; // mul a const to make return result = default normal expand amount WS
+    return cameraMulFix * 0.00005; // 乘常数得到默认法线外扩量(世界空间)：描边 pass 把顶点沿法线朝相机(向前)外扩出一层壳、正常 pass 原位(向后)，最终描边宽度=材质参数 _OutlineWidth × 本修正值
 }
 #endif
 
