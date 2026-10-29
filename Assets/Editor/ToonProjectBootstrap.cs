@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -19,6 +20,7 @@ namespace ToonLearning.Editor
     {
         const string SettingsFolder = "Assets/Settings";
         const string MaterialsFolder = "Assets/Materials";
+        const string TexturesFolder = "Assets/Textures";
         const string ScenesFolder = "Assets/Scenes";
         const string PipelineAssetPath = SettingsFolder + "/URP-ToonDemo.asset";
         static string RendererAssetPath = SettingsFolder + "/URP-ToonDemo_Renderer.asset";
@@ -230,7 +232,29 @@ namespace ToonLearning.Editor
             return go;
         }
 
-        /// <summary>创建/复用 toon 材质；BaseMap 留空（white），只用纯色，方便观察光照分层。</summary>
+        /// <summary>
+        /// 生成（或复用）一张 1x1 纯白贴图。
+        /// 本 demo 不使用任何外部美术资源，但 toon shader 的 albedo = _BaseMap * _BaseColor，
+        /// 材质里 _BaseMap 未绑定时会取到空纹理导致整面全黑，因此显式绑一张白图。
+        /// </summary>
+        static Texture2D EnsureWhiteTexture()
+        {
+            const string path = TexturesFolder + "/White_1x1.png";
+            var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+            if (tex != null) return tex;
+
+            EnsureFolder(TexturesFolder);
+            var tmp = new Texture2D(1, 1, TextureFormat.RGBA32, false) { name = "White_1x1" };
+            tmp.SetPixel(0, 0, Color.white);
+            tmp.Apply();
+            File.WriteAllBytes(path, tmp.EncodeToPNG());
+            UnityEngine.Object.DestroyImmediate(tmp);
+
+            AssetDatabase.ImportAsset(path);
+            return AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+        }
+
+        /// <summary>创建/复用 toon 材质；只用纯色 + 白图，方便观察光照分层。</summary>
         static Material ToonMaterial(string name, Color baseColor)
         {
             var path = $"{MaterialsFolder}/{name}.mat";
@@ -241,6 +265,7 @@ namespace ToonLearning.Editor
                 AssetDatabase.CreateAsset(mat, path);
             }
             mat.shader = Shader.Find(ToonShaderName);
+            mat.SetTexture("_BaseMap", EnsureWhiteTexture());
             mat.SetColor("_BaseColor", baseColor);
             EditorUtility.SetDirty(mat);
             return mat;
@@ -274,6 +299,14 @@ namespace ToonLearning.Editor
             SetupScene();
         }
 
+        /// <summary>重建场景 + 出图验证，供命令行一次跑完：-executeMethod ...RebuildAndCapture</summary>
+        [MenuItem("Toon Learning/Setup/6. 重建并出图验证")]
+        public static void RebuildAndCapture()
+        {
+            SetupScene();
+            CapturePreview();
+        }
+
         /// <summary>
         /// 离线渲染一张 ToonDemo 截图到 Docs/screenshots/，用于确认管线与材质真的出图。
         /// 需要真实图形设备：用 -batchmode（不要加 -nographics）执行。
@@ -297,6 +330,9 @@ namespace ToonLearning.Editor
             cam.targetTexture = rt;
             cam.Render();
 
+            // 出图自检信息：当前管线 + 主光，便于排查全黑问题
+            Debug.Log($"[ToonDemo] 管线={GraphicsSettings.currentRenderPipeline?.name ?? "None(内置管线)"}；主光={MainLightInfo()}");
+
             var previous = RenderTexture.active;
             RenderTexture.active = rt;
             var tex = new Texture2D(width, height, TextureFormat.RGB24, false);
@@ -311,8 +347,98 @@ namespace ToonLearning.Editor
             var outDir = root + "/Docs/screenshots";
             Directory.CreateDirectory(outDir);
             File.WriteAllBytes(outDir + "/toon-demo.png", tex.EncodeToPNG());
+
+            // 出图质量自检：全黑像素占比过高说明几何体没有正常着色
+            var pixels = tex.GetPixels32();
+            int blackCount = 0;
+            for (int i = 0; i < pixels.Length; ++i)
+            {
+                var p = pixels[i];
+                if (p.r < 5 && p.g < 5 && p.b < 5) ++blackCount;
+            }
+            Debug.Log($"[ToonDemo] 全黑像素占比 {100.0f * blackCount / pixels.Length:F1}%");
+
             UnityEngine.Object.DestroyImmediate(tex);
             Debug.Log("截图已输出：" + outDir + "/toon-demo.png");
+        }
+
+        /// <summary>诊断：管线是否生效、shader 是否可用、几何体是否真的被绘制（含 URP Lit 对照组）。</summary>
+        [MenuItem("Toon Learning/Setup/5. 诊断渲染")]
+        public static void Diagnose()
+        {
+            EditorSceneManager.OpenScene(DemoScenePath, OpenSceneMode.Single);
+            var cam = Camera.main;
+            var toon = Shader.Find(ToonShaderName);
+            var lit = Shader.Find("Universal Render Pipeline/Lit");
+
+            Debug.Log($"[Diag] pipeline={(GraphicsSettings.currentRenderPipeline == null ? "NULL(BIRP)" : GraphicsSettings.currentRenderPipeline.GetType().Name)}" +
+                      $" quality={QualitySettings.GetQualityLevel()}({QualitySettings.names[QualitySettings.GetQualityLevel()]})" +
+                      $" qualityPipeline={(QualitySettings.renderPipeline == null ? "NULL" : QualitySettings.renderPipeline.name)}");
+            Debug.Log($"[Diag] toon shader={(toon == null ? "NOT FOUND" : toon.name)} supported={(toon != null && toon.isSupported)}" +
+                      $" hasError={(toon == null ? "-" : UnityEditor.ShaderUtil.ShaderHasError(toon).ToString())}");
+            Debug.Log($"[Diag] cam pos={cam.transform.position} rot={cam.transform.rotation.eulerAngles} cullingMask={cam.cullingMask}");
+            Debug.Log($"[Diag] light={MainLightInfo()}");
+
+            var renderers = UnityEngine.Object.FindObjectsOfType<Renderer>();
+            foreach (var r in renderers)
+            {
+                var vp = cam.WorldToViewportPoint(r.bounds.center);
+                bool inView = vp.z > 0 && vp.x >= 0f && vp.x <= 1f && vp.y >= 0f && vp.y <= 1f;
+                Debug.Log($"[Diag] {r.name}: enabled={r.enabled} inView={inView} viewport={vp} mat={(r.sharedMaterial == null ? "NULL" : r.sharedMaterial.name)}");
+            }
+
+            const int width = 640, height = 360;
+            var rt = new RenderTexture(width, height, 24);
+            rt.Create();
+            cam.targetTexture = rt;
+            cam.Render();
+
+            var previous = RenderTexture.active;
+            RenderTexture.active = rt;
+            var tex = new Texture2D(width, height, TextureFormat.RGB24, false);
+            tex.ReadPixels(new Rect(0, 0, width, height), 0, 0);
+            tex.Apply();
+
+            foreach (var pt in new[] { new Vector2Int(width / 2, height / 2), new Vector2Int(width / 2, (int)(height * 0.85f)), new Vector2Int(width / 2, 10) })
+            {
+                var c = tex.GetPixel(pt.x, pt.y);
+                Debug.Log($"[Diag] pixel({pt.x},{pt.y}) = {c.r:F3},{c.g:F3},{c.b:F3}");
+            }
+
+            // 对照组：把球体换成 URP Lit 材质再渲染，判断是几何/相机问题还是 toon shader 问题
+            var target = renderers.FirstOrDefault(r => r.name.StartsWith("Sphere"));
+            if (target != null)
+            {
+                var control = new Material(lit);
+                target.sharedMaterial = control;
+                cam.Render();
+                var tex2 = new Texture2D(width, height, TextureFormat.RGB24, false);
+                tex2.ReadPixels(new Rect(0, 0, width, height), 0, 0);
+                tex2.Apply();
+                var cc = tex2.GetPixel(width / 2, height / 2);
+                Debug.Log($"[Diag] after-swap-to-URPLit pixel = {cc.r:F3},{cc.g:F3},{cc.b:F3}");
+                UnityEngine.Object.DestroyImmediate(tex2);
+                UnityEngine.Object.DestroyImmediate(control);
+            }
+
+            RenderTexture.active = previous;
+            cam.targetTexture = null;
+            UnityEngine.Object.DestroyImmediate(tex);
+            UnityEngine.Object.DestroyImmediate(rt);
+        }
+
+        /// <summary>返回场景里最亮的那盏方向光的信息（用于诊断全黑）。</summary>
+        static string MainLightInfo()
+        {
+            Light best = null;
+            foreach (var l in UnityEngine.Object.FindObjectsOfType<Light>())
+            {
+                if (l.type != LightType.Directional || !l.enabled || !l.isActiveAndEnabled) continue;
+                if (best == null || l.intensity > best.intensity) best = l;
+            }
+            return best == null
+                ? "无方向光"
+                : $"{best.name} intensity={best.intensity:F2} shadows={best.shadows} cullingMask={best.cullingMask}";
         }
     }
 }
